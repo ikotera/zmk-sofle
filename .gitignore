@@ -3,3 +3,29 @@ zmk/
 modules/
 tools/
 .west/
+
+# Zephyr dependencies  
+zephyr/
+
+# Board-specific generated files
+eyelash_sofle/
+
+# Python virtual environment
+zmk-venv/
+venv/
+__pycache__/
+*.pyc
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.log
