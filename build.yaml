@@ -1,6 +1,8 @@
 ---
 include:
   - board: eyelash_sofle_left
-    artifact-name: eyelash_sofle_left
+    shield: nice_view # ディスプレイ用シールド
+    artifact-name: eyelash_sofle_left_display
   - board: eyelash_sofle_right
-    artifact-name: eyelash_sofle_right
+    shield: nice_view # ディスプレイ用シールド
+    artifact-name: eyelash_sofle_right_display
