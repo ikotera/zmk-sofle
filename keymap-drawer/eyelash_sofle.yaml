@@ -328,3 +328,6 @@ layers:
 combos:
 - p: [14, 28, 40]
   k: '&soft_off'
+- p: [0, 11]
+  k: '&studio_unlock'
+  l: [LAYER0]
