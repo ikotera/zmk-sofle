@@ -1,8 +1,6 @@
 ---
 include:
   - board: eyelash_sofle_left
-    shield: settings_reset
-    artifact-name: eyelash_sofle_left_reset
+    artifact-name: eyelash_sofle_left
   - board: eyelash_sofle_right
-    shield: settings_reset
-    artifact-name: eyelash_sofle_right_reset
+    artifact-name: eyelash_sofle_right
