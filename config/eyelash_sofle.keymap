@@ -9,7 +9,6 @@
 #include <dt-bindings/zmk/outputs.h>
 #include <dt-bindings/zmk/pointing.h>
 #include <dt-bindings/zmk/rgb.h>
-#include <dt-bindings/zmk/studio.h>
 
 &mmv_input_listener { input-processors = <&zip_xy_scaler 2 1>; };
 
@@ -39,6 +38,10 @@
     };
 
     behaviors {
+        studio_unlock: studio_unlock {
+            compatible = "zmk,behavior-studio-unlock";
+            #binding-cells = <0>;
+        };
     };
 
     combos {
