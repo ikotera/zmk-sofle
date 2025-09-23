@@ -1,8 +1,6 @@
 ---
 include:
   - board: eyelash_sofle_left
-    shield: nice_view
-    artifact-name: eyelash_sofle_left
+    artifact-name: eyelash_sofle_left_simple
   - board: eyelash_sofle_right
-    shield: nice_view
-    artifact-name: eyelash_sofle_right
+    artifact-name: eyelash_sofle_right_simple
