@@ -4,6 +4,11 @@ modules/
 tools/
 .west/
 
+# Firmware builds
+builds/
+firmware/
+*.uf2
+
 # Zephyr dependencies  
 zephyr/
 
