@@ -2,6 +2,7 @@
 include:
   - board: eyelash_sofle_left
     shield: nice_view # ディスプレイ用シールド
+    snippet: studio-rpc-usb-uart # ZMK Studio を USB 経由で使うため（central 側のみ）
     artifact-name: eyelash_sofle_left_display
   - board: eyelash_sofle_right
     shield: nice_view # ディスプレイ用シールド
