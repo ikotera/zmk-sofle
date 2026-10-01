@@ -93,3 +93,20 @@ README の要点
 トラブルシューティング（本リポジトリ特有）
 - ボードが見つからない場合: west init -l config と west update を実行済みか、zephyr/module.yml の board_root: . が維持されているか確認してください。
 - ディスプレイ関連でビルド失敗: -DSHIELD=nice_view を付与しているか、config/eyelash_sofle.conf で CONFIG_ZMK_DISPLAY が意図通りか確認してください。
+
+ZMK バージョン固定（2026-10 追記）
+- ZMK main は Zephyr 4.1（ハードウェアモデル v2）へ移行済みで、本リポジトリの旧形式ボード定義（boards/arm/）とは非互換の可能性があるため、config/west.yml と .github/workflows/build.yml を v0.3（Zephyr 3.5）に固定している。
+
+Bluetooth 接続（macOS）
+- 左手が central（PC と通信）、右手は左手と BLE で通信する peripheral。右手は USB を給電・充電にしか使わない。
+- ペアリング: 右親指の &mo 2 キーを押しながら数字 1 の位置（BT_SEL 0）を押す → macOS の「システム設定 > Bluetooth」に出る「Eyelash Sofle」に接続。プロファイル 0〜4 が数字 1〜5 の位置。
+- USB と BLE の両方が繋がっていると既定では USB が優先される。&mo 2 + A 位置（OUT_USB）/ S 位置（OUT_BLE）で切り替え（選択はフラッシュに保存される）。USB を抜けば自動的に BLE になる。
+- 接続がおかしいときは &mo 2 + Q 位置（BT_CLR）で現プロファイルの紐付けを消し、macOS 側でもデバイスを削除してから再ペアリング。
+
+ZMK Studio（GUI キーマップ編集）
+- 左手ビルドに studio-rpc-usb-uart スニペットを付けている（build.yaml）。左手を USB 接続し、ZMK Studio アプリ（/Applications/ZMK Studio.app）または Chrome/Edge の https://zmk.studio/ から接続する。
+- CONFIG_ZMK_STUDIO_LOCKING=n なのでアンロック操作は不要（必要時は ESC 位置の studio_unlock または ESC+BACKSPACE コンボ）。
+- Studio で変更したキーマップはキーボード内に保存され、以後 config/eyelash_sofle.keymap の変更は Studio の「Restore Stock Settings」を実行するまで反映されない。
+
+書き込み手順
+- &mo 2 + C 位置（左手 &bootloader）/ &mo 2 + / 位置（右手 &bootloader）、またはリセットボタン 2 度押しでブートローダーへ。マウントされたドライブに UF2 をコピーする。左右は同じ ZMK バージョンでビルドしたものを揃えて書き込む。
