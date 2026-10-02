@@ -112,5 +112,5 @@ ZMK Studio（GUI キーマップ編集）
 - &mo 2 + C 位置（左手 &bootloader）/ &mo 2 + / 位置（右手 &bootloader）、またはリセットボタン 2 度押しでブートローダーへ。マウントされたドライブに UF2 をコピーする。左右は同じ ZMK バージョンでビルドしたものを揃えて書き込む。
 
 レイヤー表示ツール（layer-viewer/）
-- アクティブなレイヤーのキー配列を、修飾込みで実際に入力される文字（Shift+2 → @ 等）で画面表示するブラウザツール。詳細は layer-viewer/README.md。
+- アクティブなレイヤーのキー配列を、修飾込みで実際に入力される文字（Shift+2 → @ 等）で画面表示し、押下中のキーをハイライトする。ブラウザ版は layer-viewer/、macOS ネイティブ版（メニューバー常駐、約 20 MB）は layer-viewer-mac/。
 - ファームウェア側は zmk-raw-hid（config/west.yml）＋ 本リポジトリ直下の src/layer_report.c（zephyr/module.yml で ZMK モジュール化）。左手ビルドに raw_hid_adapter シールドを追加している。

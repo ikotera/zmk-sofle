@@ -71,6 +71,8 @@
   .k.sys text.main { fill: var(--sys); }
   .k.trans text.main { fill: var(--dim); }
   .k.none rect { fill: transparent; }
+  .k.pressed rect { fill: var(--accent); stroke: var(--accent); }
+  .k.pressed text { fill: var(--accent-text) !important; }
   #msg { font-size: 13px; color: var(--muted); line-height: 1.7; }
   #msg code { background: var(--key); padding: 1px 5px; border-radius: 4px; }
   body.pip header, body.pip #layers, body.pip #msg { display: none; }
@@ -118,6 +120,7 @@ const state = {
   keymap: store.get("lv.keymap", null), // { savedAt, keys, layers, behaviors }
   layerMask: 1,                          // layer id 単位のビットマスク
   preview: null,                         // 手動プレビュー中のレイヤー index
+  pressed: new Set(),                    // 押下中のキー位置
   hidDevice: null,
 };
 
@@ -158,7 +161,7 @@ const KEY_NAMES = {
   0x4c: "Del", 0x4d: "End", 0x4e: "PgDn", 0x4f: "→", 0x50: "←", 0x51: "↓", 0x52: "↑",
   0x53: "NumLk", 0x54: "/", 0x55: "*", 0x56: "-", 0x57: "+", 0x58: "⏎", 0x63: ".",
   0x65: "Menu", 0x87: "_", 0x88: "かな", 0x89: "¥", 0x8a: "変換", 0x8b: "無変換",
-  0x90: "かな", 0x91: "英数",
+  0x90: "かな", 0x91: "英数", 0x7f: "🔇", 0x80: "🔊", 0x81: "🔉",
 };
 for (let i = 0; i < 12; i++) KEY_NAMES[0x3a + i] = "F" + (i + 1);
 for (let i = 0; i < 12; i++) KEY_NAMES[0x68 + i] = "F" + (i + 13);
@@ -216,6 +219,12 @@ const BL = ["BL On", "BL Off", "BL Tog", "BL+", "BL-", "BL Cyc", "BL Set"];
 const EXT = ["Ext Off", "Ext On", "Ext Tog"];
 const MOUSE_BTN = ["L", "R", "M", "4", "5"];
 
+// マウス移動・スクロール量（上位 16bit = X, 下位 16bit = Y, 符号付き）を矢印に
+function arrow(v) {
+  const x = (v >> 16) << 16 >> 16, y = (v << 16) >> 16;
+  return (y < 0 ? "↑" : y > 0 ? "↓" : "") + (x < 0 ? "←" : x > 0 ? "→" : "");
+}
+
 function labelFor(b) {
   const name = state.keymap.behaviors[b.behaviorId] || "";
   switch (name) {
@@ -239,6 +248,10 @@ function labelFor(b) {
     case "Underglow": return { main: RGB[b.param1] || "RGB", kind: "sys" };
     case "Backlight": return { main: BL[b.param1] || "BL", kind: "sys" };
     case "External Power": return { main: EXT[b.param1] || "Ext", kind: "sys" };
+    // 以下は Studio が表示名を持たず、デバイスツリーのノード名で返ってくるもの
+    case "mouse_move": return { main: "🖱" + arrow(b.param1), kind: "sys" };
+    case "mouse_scroll": return { main: "⇳" + arrow(b.param1), kind: "sys" };
+    case "z_so_off": return { main: "Off", kind: "sys" };
     case "Reset": return { main: "Reset", kind: "sys" };
     case "Bootloader": return { main: "Boot", kind: "sys" };
     case "Studio Unlock": return { main: "Studio", kind: "sys" };
@@ -311,6 +324,7 @@ function render() {
     const inherited = res && res.fromIdx !== top;
     let cls = "k " + (lab.kind || "char");
     if (inherited && lab.kind !== "none") cls += " trans";
+    if (state.pressed.has(pos)) cls += " pressed";
     const cx = (x + w / 2) * U, cy = (y + h / 2) * U;
     const lines = lab.main.split("\n");
     const longest = Math.max(...lines.map((s) => [...s].length));
@@ -400,6 +414,13 @@ async function attachHid(dev) {
     const v = ev.data;
     if (v.byteLength < 8 || v.getUint8(0) !== 0x4c) return;
     state.layerMask = v.getUint32(4, true) | 1;
+    state.pressed = new Set();
+    if (v.getUint8(1) >= 2) {
+      for (let i = 8; i < v.byteLength; i++) {
+        const byte = v.getUint8(i);
+        for (let b = 0; b < 8; b++) if (byte & (1 << b)) state.pressed.add((i - 8) * 8 + b);
+      }
+    }
     state.preview = null;
     render();
   };
@@ -428,6 +449,7 @@ if (navigator.hid) {
     if (e.device === state.hidDevice) {
       state.hidDevice = null;
       state.layerMask = 1;
+      state.pressed = new Set();
       setPill("stHid", "レイヤー通知: 切断", "warn");
       render();
     }
