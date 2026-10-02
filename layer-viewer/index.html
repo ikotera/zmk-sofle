@@ -415,6 +415,7 @@ $("btnHid").onclick = async () => {
   try {
     const [dev] = await navigator.hid.requestDevice({ filters: [RAW_HID] });
     if (dev) await attachHid(dev);
+    else setPill("stHid", "レイヤー通知: キーボードが見つかりません（左手に Raw HID 対応ファームウェアを書き込んでください）", "warn");
   } catch (e) {
     console.error(e);
     setPill("stHid", "接続失敗: " + (e.message || e), "err");
