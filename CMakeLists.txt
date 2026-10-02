@@ -1,0 +1,5 @@
+if (CONFIG_ZMK_LAYER_REPORT)
+  zephyr_library()
+  zephyr_library_sources(src/layer_report.c)
+  zephyr_include_directories(${APPLICATION_SOURCE_DIR}/include)
+endif()

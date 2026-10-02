@@ -1,0 +1,4 @@
+config ZMK_LAYER_REPORT
+    bool "Report active layer state to host over Raw HID"
+    default y
+    depends on RAW_HID

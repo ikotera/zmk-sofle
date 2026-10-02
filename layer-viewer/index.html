@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layer Viewer</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1b1f26;
+    --key: #222730;
+    --key-edge: #2b313b;
+    --text: #e8eaee;
+    --muted: #8a919d;
+    --dim: #5b6270;
+    --accent: #7b7cf6;
+    --accent-text: #ffffff;
+    --layer: #4fb3a9;
+    --sys: #d79b5a;
+    --ok: #57c78a;
+    --warn: #e2b155;
+    --err: #e5736c;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7;
+      --panel: #ffffff;
+      --key: #ffffff;
+      --key-edge: #d5d9e0;
+      --text: #1d2129;
+      --muted: #687080;
+      --dim: #a3a9b4;
+      --accent: #5b5ce6;
+      --layer: #23877d;
+      --sys: #b36d22;
+      --ok: #23935a;
+      --warn: #a87a12;
+      --err: #c4423a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--key-edge); }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  button, select { font: inherit; font-size: 13px; color: var(--text); background: var(--key);
+    border: 1px solid var(--key-edge); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .pill { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--key-edge); color: var(--muted); }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.err { color: var(--err); border-color: var(--err); }
+  .spacer { flex: 1; }
+  main { display: flex; gap: 16px; padding: 16px; }
+  #stage { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  #layers { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
+  #layers .title { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  #layers button { text-align: left; border-color: transparent; background: transparent; }
+  #layers button.active { background: var(--accent); color: var(--accent-text); }
+  #layers button.on:not(.active) { border-color: var(--accent); }
+  #current { font-size: 22px; font-weight: 600; }
+  #current small { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 8px; }
+  svg { width: 100%; height: auto; display: block; }
+  .k rect { fill: var(--key); stroke: var(--key-edge); stroke-width: 1.5; }
+  .k text { fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+  .k .shift { fill: var(--muted); font-size: 11px; text-anchor: end; }
+  .k .hold { fill: var(--layer); font-size: 10px; }
+  .k.layer text.main { fill: var(--layer); }
+  .k.sys text.main { fill: var(--sys); }
+  .k.trans text.main { fill: var(--dim); }
+  .k.none rect { fill: transparent; }
+  #msg { font-size: 13px; color: var(--muted); line-height: 1.7; }
+  #msg code { background: var(--key); padding: 1px 5px; border-radius: 4px; }
+  body.pip header, body.pip #layers, body.pip #msg { display: none; }
+  body.pip main { padding: 6px; }
+  body.pip #current { font-size: 14px; }
+  @media (max-width: 640px) { main { flex-direction: column; } #layers { flex-direction: row; flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Layer Viewer</h1>
+  <button id="btnKeymap" title="左手を USB 接続して ZMK Studio 経由でキーマップを読み込みます">キーマップ取得（USB）</button>
+  <button id="btnHid" title="Raw HID でアクティブレイヤーの通知を受け取ります">レイヤー通知に接続</button>
+  <button id="btnPip" title="常に最前面に表示される小窓で開きます">最前面ウィンドウ</button>
+  <span class="spacer"></span>
+  <label>ホスト側の配列
+    <select id="hostLayout">
+      <option value="us">US</option>
+      <option value="jis">JIS</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="showShift" checked> Shift時の文字も表示</label>
+  <span id="stKeymap" class="pill">キーマップ未取得</span>
+  <span id="stHid" class="pill">レイヤー通知: 未接続</span>
+</header>
+<main>
+  <nav id="layers"><div class="title">Layers</div></nav>
+  <section id="stage">
+    <div id="current"></div>
+    <div id="board"></div>
+    <div id="msg"></div>
+  </section>
+</main>
+
+<script type="module">
+import { create_rpc_connection, call_rpc, MetaError } from "https://cdn.jsdelivr.net/npm/@zmkfirmware/zmk-studio-ts-client@0.0.18/+esm";
+
+// ---------- 永続化（取得済みキーマップと設定） ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+const state = {
+  keymap: store.get("lv.keymap", null), // { savedAt, keys, layers, behaviors }
+  layerMask: 1,                          // layer id 単位のビットマスク
+  preview: null,                         // 手動プレビュー中のレイヤー index
+  hidDevice: null,
+};
+
+const $ = (id) => document.getElementById(id);
+// 最前面ウィンドウへ移した後も参照できるよう、描画先は起動時に掴んでおく
+const els = { stage: $("stage"), board: $("board"), current: $("current"), msg: $("msg") };
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+$("hostLayout").value = store.get("lv.hostLayout", "us");
+$("showShift").checked = store.get("lv.showShift", true);
+$("hostLayout").onchange = (e) => { store.set("lv.hostLayout", e.target.value); render(); };
+$("showShift").onchange = (e) => { store.set("lv.showShift", e.target.checked); render(); };
+
+// ---------- HID Usage → 実際に入力される文字 ----------
+// [通常, Shift] の組。ホスト OS のキーボード配列設定によって変わる部分だけ US / JIS で分ける。
+const COMMON = {};
+for (let i = 0; i < 26; i++) {
+  const c = String.fromCharCode(97 + i);
+  COMMON[0x04 + i] = [c, c.toUpperCase()];
+}
+COMMON[0x2c] = ["Space", "Space"];
+const US = {
+  0x1e: ["1", "!"], 0x1f: ["2", "@"], 0x20: ["3", "#"], 0x21: ["4", "$"], 0x22: ["5", "%"],
+  0x23: ["6", "^"], 0x24: ["7", "&"], 0x25: ["8", "*"], 0x26: ["9", "("], 0x27: ["0", ")"],
+  0x2d: ["-", "_"], 0x2e: ["=", "+"], 0x2f: ["[", "{"], 0x30: ["]", "}"], 0x31: ["\\", "|"],
+  0x32: ["#", "~"], 0x33: [";", ":"], 0x34: ["'", "\""], 0x35: ["`", "~"], 0x36: [",", "<"],
+  0x37: [".", ">"], 0x38: ["/", "?"], 0x64: ["\\", "|"],
+};
+const JIS = {
+  0x1e: ["1", "!"], 0x1f: ["2", "\""], 0x20: ["3", "#"], 0x21: ["4", "$"], 0x22: ["5", "%"],
+  0x23: ["6", "&"], 0x24: ["7", "'"], 0x25: ["8", "("], 0x26: ["9", ")"], 0x27: ["0", ""],
+  0x2d: ["-", "="], 0x2e: ["^", "~"], 0x2f: ["@", "`"], 0x30: ["[", "{"], 0x31: ["]", "}"],
+  0x32: ["]", "}"], 0x33: [";", "+"], 0x34: [":", "*"], 0x35: ["半/全", "半/全"], 0x36: [",", "<"],
+  0x37: [".", ">"], 0x38: ["/", "?"], 0x87: ["\\", "_"], 0x89: ["¥", "|"],
+};
+const KEY_NAMES = {
+  0x28: "⏎", 0x29: "Esc", 0x2a: "⌫", 0x2b: "Tab", 0x39: "Caps",
+  0x46: "PrtSc", 0x47: "ScrLk", 0x48: "Pause", 0x49: "Ins", 0x4a: "Home", 0x4b: "PgUp",
+  0x4c: "Del", 0x4d: "End", 0x4e: "PgDn", 0x4f: "→", 0x50: "←", 0x51: "↓", 0x52: "↑",
+  0x53: "NumLk", 0x54: "/", 0x55: "*", 0x56: "-", 0x57: "+", 0x58: "⏎", 0x63: ".",
+  0x65: "Menu", 0x87: "_", 0x88: "かな", 0x89: "¥", 0x8a: "変換", 0x8b: "無変換",
+  0x90: "かな", 0x91: "英数",
+};
+for (let i = 0; i < 12; i++) KEY_NAMES[0x3a + i] = "F" + (i + 1);
+for (let i = 0; i < 12; i++) KEY_NAMES[0x68 + i] = "F" + (i + 13);
+for (let i = 0; i < 9; i++) KEY_NAMES[0x59 + i] = String(i + 1);
+KEY_NAMES[0x62] = "0";
+const CONSUMER = {
+  0xe2: "🔇", 0xe9: "🔊", 0xea: "🔉", 0xcd: "⏯", 0xb5: "⏭", 0xb6: "⏮", 0xb7: "⏹",
+  0x6f: "🔆", 0x70: "🔅", 0xb8: "⏏",
+};
+const MOD_BITS = [ // [bit, mac 記号, 他 OS 表記]
+  [0x11, "⌃", "Ctrl+"], [0x44, "⌥", "Alt+"], [0x22, "⇧", "Shift+"], [0x88, "⌘", "Win+"],
+];
+const MOD_KEYS = { 0xe0: "Ctrl", 0xe1: "Shift", 0xe2: "Alt", 0xe3: "GUI", 0xe4: "Ctrl", 0xe5: "Shift", 0xe6: "Alt", 0xe7: "GUI" };
+const MOD_KEYS_MAC = { Ctrl: "⌃ Ctrl", Shift: "⇧ Shift", Alt: "⌥ Opt", GUI: "⌘ Cmd" };
+
+function charFor(id, shifted) {
+  const table = $("hostLayout").value === "jis" ? JIS : US;
+  const pair = COMMON[id] || table[id];
+  return pair ? pair[shifted ? 1 : 0] : null;
+}
+function modPrefix(mods) {
+  return MOD_BITS.filter(([b]) => mods & b).map(([, m, o]) => (isMac ? m : o)).join("");
+}
+
+// ZMK のキーコード（上位 8bit = 修飾, 次の 8bit = Usage Page, 下位 16bit = Usage ID）を文字に
+function decodeKey(code) {
+  const mods = (code >>> 24) & 0xff, page = (code >>> 16) & 0xff, id = code & 0xffff;
+  if (page === 0x0c) return { main: CONSUMER[id] || `C:${id.toString(16)}` };
+  if (page !== 0x07) return { main: `?${code.toString(16)}` };
+  if (MOD_KEYS[id]) {
+    const n = MOD_KEYS[id];
+    return { main: isMac ? MOD_KEYS_MAC[n] : n, kind: "mod" };
+  }
+  const shift = (mods & 0x22) !== 0, other = mods & ~0x22;
+  const ch = charFor(id, shift);
+  if (ch != null && ch !== "") {
+    if (other) return { main: modPrefix(other) + (shift ? ch : ch.toUpperCase()) };
+    const alt = shift ? null : charFor(id, true);
+    const showAlt = alt && alt !== ch.toUpperCase() && alt !== ch;
+    return { main: ch, shift: showAlt ? alt : null };
+  }
+  const name = KEY_NAMES[id] || `0x${id.toString(16)}`;
+  return { main: modPrefix(mods) + name };
+}
+
+// ---------- behavior ごとのラベル ----------
+const layerNameById = (id) => {
+  const l = state.keymap.layers.find((x) => x.id === id);
+  return l ? l.name : `L${id}`;
+};
+const BT = ["BT Clr", "BT ▶", "BT ◀", "BT", "BT Clr All", "BT Disc"];
+const OUT = ["USB/BLE", "USB", "BLE"];
+const RGB = ["RGB Tog", "RGB On", "RGB Off", "Hue+", "Hue-", "Sat+", "Sat-", "Bri+", "Bri-", "Spd+", "Spd-", "Eff+", "Eff-", "Eff", "Color"];
+const BL = ["BL On", "BL Off", "BL Tog", "BL+", "BL-", "BL Cyc", "BL Set"];
+const EXT = ["Ext Off", "Ext On", "Ext Tog"];
+const MOUSE_BTN = ["L", "R", "M", "4", "5"];
+
+function labelFor(b) {
+  const name = state.keymap.behaviors[b.behaviorId] || "";
+  switch (name) {
+    case "Key Press": return decodeKey(b.param1);
+    case "None": return { main: "", kind: "none" };
+    case "Transparent": return { main: "▽", kind: "trans" };
+    case "Momentary Layer": return { main: "MO\n" + layerNameById(b.param1), kind: "layer" };
+    case "Toggle Layer": return { main: "TG\n" + layerNameById(b.param1), kind: "layer" };
+    case "To Layer": return { main: "TO\n" + layerNameById(b.param1), kind: "layer" };
+    case "Sticky Layer": return { main: "SL\n" + layerNameById(b.param1), kind: "layer" };
+    case "Layer-Tap": return { ...decodeKey(b.param2), hold: "▾" + layerNameById(b.param1) };
+    case "Mod-Tap": return { ...decodeKey(b.param2), hold: "▾" + decodeKey(b.param1).main.replace(/^. /, "") };
+    case "Sticky Key": return { main: "1×" + decodeKey(b.param1).main, kind: "mod" };
+    case "Key Toggle": return { main: "⇅" + decodeKey(b.param1).main, kind: "mod" };
+    case "Mouse Key Press": {
+      const bs = MOUSE_BTN.filter((_, i) => b.param1 & (1 << i));
+      return { main: "🖱" + bs.join("+"), kind: "sys" };
+    }
+    case "Bluetooth": return { main: BT[b.param1] + (b.param1 === 3 || b.param1 === 5 ? " " + b.param2 : ""), kind: "sys" };
+    case "Output Selection": return { main: OUT[b.param1] || "Out", kind: "sys" };
+    case "Underglow": return { main: RGB[b.param1] || "RGB", kind: "sys" };
+    case "Backlight": return { main: BL[b.param1] || "BL", kind: "sys" };
+    case "External Power": return { main: EXT[b.param1] || "Ext", kind: "sys" };
+    case "Reset": return { main: "Reset", kind: "sys" };
+    case "Bootloader": return { main: "Boot", kind: "sys" };
+    case "Studio Unlock": return { main: "Studio", kind: "sys" };
+    case "Caps Word": return { main: "CapsWd", kind: "mod" };
+    case "Key Repeat": return { main: "Rep", kind: "mod" };
+    case "Grave/Escape": return { main: "Esc\n`", kind: "mod" };
+    default: return { main: name ? name : "?", kind: "sys" }; // Studio 非対応 behavior（マウス移動等）
+  }
+}
+
+// ---------- レイヤー解決 ----------
+function activeIndices() {
+  const { layers } = state.keymap;
+  if (state.preview != null) return [0, state.preview];
+  return layers.map((l, i) => (i === 0 || (state.layerMask >>> l.id) & 1 ? i : -1)).filter((i) => i >= 0);
+}
+function resolve(pos, active) {
+  const { layers, behaviors } = state.keymap;
+  for (let k = active.length - 1; k >= 0; k--) {
+    const idx = active[k];
+    const b = layers[idx].bindings[pos];
+    if (!b) continue;
+    if (behaviors[b.behaviorId] === "Transparent" && idx !== 0) continue;
+    return { b, fromIdx: idx };
+  }
+  return null;
+}
+
+// ---------- 描画 ----------
+const U = 60, GAP = 3;
+function render() {
+  const km = state.keymap;
+  const layersNav = $("layers");
+  layersNav.querySelectorAll("button").forEach((b) => b.remove());
+  if (!km) {
+    els.board.innerHTML = "";
+    els.current.textContent = "";
+    els.msg.innerHTML = `
+      <p>左手を USB で接続し「キーマップ取得（USB）」を押して、ZMK Studio のシリアルポートを選んでください。取得したキーマップはこのブラウザに保存され、次回以降は Bluetooth 接続中でも表示できます。</p>
+      <p>続けて「レイヤー通知に接続」を押し、キーボード（Raw HID）を選ぶと、押しているレイヤーに合わせて表示が自動で切り替わります。</p>`;
+    return;
+  }
+  const active = activeIndices();
+  const top = active[active.length - 1];
+  km.layers.forEach((l, i) => {
+    const btn = document.createElement("button");
+    btn.textContent = l.name;
+    if (i === top) btn.classList.add("active");
+    else if (active.includes(i)) btn.classList.add("on");
+    btn.onclick = () => { state.preview = state.preview === i || i === 0 ? null : i; render(); };
+    layersNav.appendChild(btn);
+  });
+  els.current.innerHTML = `${esc(km.layers[top].name)}<small>${state.preview != null ? "プレビュー中（もう一度押すと解除）" : ""}</small>`;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const showShift = $("showShift").checked;
+  const parts = km.keys.map((k, pos) => {
+    const x = k.x / 100, y = k.y / 100, w = k.width / 100, h = k.height / 100;
+    const r = k.r / 100, rx = k.rx / 100, ry = k.ry / 100;
+    // 回転後の四隅で描画範囲を求める
+    const rad = (r * Math.PI) / 180;
+    for (const [px, py] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
+      const dx = px - rx, dy = py - ry;
+      const qx = rx + dx * Math.cos(rad) - dy * Math.sin(rad);
+      const qy = ry + dx * Math.sin(rad) + dy * Math.cos(rad);
+      minX = Math.min(minX, qx); minY = Math.min(minY, qy); maxX = Math.max(maxX, qx); maxY = Math.max(maxY, qy);
+    }
+    const res = resolve(pos, active);
+    let lab = res ? labelFor(res.b) : { main: "", kind: "none" };
+    const inherited = res && res.fromIdx !== top;
+    let cls = "k " + (lab.kind || "char");
+    if (inherited && lab.kind !== "none") cls += " trans";
+    const cx = (x + w / 2) * U, cy = (y + h / 2) * U;
+    const lines = lab.main.split("\n");
+    const longest = Math.max(...lines.map((s) => [...s].length));
+    const fs = lines.length > 1 ? 13 : longest <= 1 ? 26 : longest <= 2 ? 20 : longest <= 4 ? 15 : longest <= 6 ? 12 : 10;
+    const lh = fs * 1.15;
+    const texts = lines.map((s, i) =>
+      `<text class="main" x="${cx}" y="${cy + (i - (lines.length - 1) / 2) * lh - (lab.hold ? 6 : 0)}" font-size="${fs}">${esc(s)}</text>`).join("");
+    const sh = showShift && lab.shift ? `<text class="shift" x="${(x + w) * U - 9}" y="${y * U + 13}">${esc(lab.shift)}</text>` : "";
+    const hold = lab.hold ? `<text class="hold" x="${cx}" y="${(y + h) * U - 12}">${esc(lab.hold)}</text>` : "";
+    return `<g class="${cls}" transform="rotate(${r} ${rx * U} ${ry * U})">
+      <rect x="${x * U + GAP}" y="${y * U + GAP}" width="${w * U - GAP * 2}" height="${h * U - GAP * 2}" rx="7"/>
+      ${texts}${sh}${hold}</g>`;
+  });
+  const pad = 0.1;
+  const vb = [(minX - pad) * U, (minY - pad) * U, (maxX - minX + pad * 2) * U, (maxY - minY + pad * 2) * U];
+  els.board.innerHTML = `<svg viewBox="${vb.join(" ")}" role="img" aria-label="${esc(km.layers[top].name)} のキー配列">${parts.join("")}</svg>`;
+  els.msg.textContent = "";
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+function setPill(id, text, level) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "pill" + (level ? " " + level : "");
+}
+function showKeymapStatus() {
+  if (state.keymap) setPill("stKeymap", "キーマップ: " + new Date(state.keymap.savedAt).toLocaleString(), "ok");
+}
+
+// ---------- ZMK Studio（Web Serial）でキーマップ取得 ----------
+async function openSerial() {
+  const port = await navigator.serial.requestPort({});
+  await port.open({ baudRate: 12500 });
+  const abortController = new AbortController();
+  abortController.signal.addEventListener("abort", async () => {
+    try { await port.writable?.close(); } catch {}
+    try { await port.readable?.cancel(); } catch {}
+    try { await port.close(); } catch {}
+  }, { once: true });
+  return { label: "serial", abortController, readable: port.readable, writable: port.writable };
+}
+
+$("btnKeymap").onclick = async () => {
+  if (!navigator.serial) return setPill("stKeymap", "Web Serial 非対応（Chrome / Edge で開いてください）", "err");
+  let transport;
+  try {
+    transport = await openSerial();
+    setPill("stKeymap", "読み込み中…", "warn");
+    const conn = create_rpc_connection(transport);
+    const layouts = (await call_rpc(conn, { keymap: { getPhysicalLayouts: true } })).keymap.getPhysicalLayouts;
+    const keymap = (await call_rpc(conn, { keymap: { getKeymap: true } })).keymap.getKeymap;
+    const ids = (await call_rpc(conn, { behaviors: { listAllBehaviors: true } })).behaviors.listAllBehaviors.behaviors;
+    const behaviors = {};
+    for (const id of ids) {
+      const d = (await call_rpc(conn, { behaviors: { getBehaviorDetails: { behaviorId: id } } })).behaviors.getBehaviorDetails;
+      behaviors[id] = d.displayName;
+    }
+    state.keymap = {
+      savedAt: Date.now(),
+      keys: layouts.layouts[layouts.activeLayoutIndex].keys,
+      layers: keymap.layers.map((l, i) => ({ id: l.id, name: l.name || `Layer ${i}`, bindings: l.bindings })),
+      behaviors,
+    };
+    store.set("lv.keymap", state.keymap);
+    state.preview = null;
+    showKeymapStatus();
+    render();
+  } catch (e) {
+    console.error(e);
+    const locked = e instanceof MetaError;
+    setPill("stKeymap", locked ? "Studio がロック中です（studio_unlock を押してから再試行）" : "取得失敗: " + (e.message || e), "err");
+  } finally {
+    // ZMK Studio アプリでも使えるようにポートを解放する
+    transport?.abortController.abort();
+  }
+};
+
+// ---------- Raw HID でアクティブレイヤーを受信 ----------
+const RAW_HID = { usagePage: 0xff60, usage: 0x61 };
+const isRawHid = (d) => d.collections.some((c) => c.usagePage === RAW_HID.usagePage && c.usage === RAW_HID.usage);
+
+async function attachHid(dev) {
+  if (!dev.opened) await dev.open();
+  state.hidDevice = dev;
+  dev.oninputreport = (ev) => {
+    const v = ev.data;
+    if (v.byteLength < 8 || v.getUint8(0) !== 0x4c) return;
+    state.layerMask = v.getUint32(4, true) | 1;
+    state.preview = null;
+    render();
+  };
+  setPill("stHid", "レイヤー通知: " + dev.productName, "ok");
+  // 接続直後に現在の状態を問い合わせる
+  const req = new Uint8Array(32);
+  req[0] = 0x4c;
+  try { await dev.sendReport(0, req); } catch (e) { console.warn("状態問い合わせに失敗", e); }
+}
+
+$("btnHid").onclick = async () => {
+  if (!navigator.hid) return setPill("stHid", "WebHID 非対応（Chrome / Edge で開いてください）", "err");
+  try {
+    const [dev] = await navigator.hid.requestDevice({ filters: [RAW_HID] });
+    if (dev) await attachHid(dev);
+  } catch (e) {
+    console.error(e);
+    setPill("stHid", "接続失敗: " + (e.message || e), "err");
+  }
+};
+
+if (navigator.hid) {
+  navigator.hid.addEventListener("connect", (e) => { if (isRawHid(e.device)) attachHid(e.device).catch(console.error); });
+  navigator.hid.addEventListener("disconnect", (e) => {
+    if (e.device === state.hidDevice) {
+      state.hidDevice = null;
+      state.layerMask = 1;
+      setPill("stHid", "レイヤー通知: 切断", "warn");
+      render();
+    }
+  });
+  // 以前に許可したデバイスへは自動で再接続する
+  navigator.hid.getDevices().then((ds) => { const d = ds.find(isRawHid); if (d) attachHid(d).catch(console.error); });
+}
+
+// ---------- 最前面の小窓（Document Picture-in-Picture） ----------
+$("btnPip").onclick = async () => {
+  if (!("documentPictureInPicture" in window)) return alert("このブラウザは最前面ウィンドウに対応していません（Chrome / Edge 116 以降）。");
+  const stage = els.stage;
+  const pip = await documentPictureInPicture.requestWindow({ width: 760, height: 330 });
+  pip.document.head.innerHTML = document.head.querySelector("style").outerHTML;
+  pip.document.body.className = "pip";
+  const m = pip.document.createElement("main");
+  m.appendChild(stage);
+  pip.document.body.appendChild(m);
+  pip.addEventListener("pagehide", () => { document.querySelector("main").appendChild(stage); });
+};
+
+showKeymapStatus();
+render();
+</script>
+</body>
+</html>

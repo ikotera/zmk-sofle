@@ -1,7 +1,7 @@
 ---
 include:
   - board: eyelash_sofle_left
-    shield: nice_view # ディスプレイ用シールド
+    shield: nice_view raw_hid_adapter # ディスプレイ用シールド + layer-viewer 用 Raw HID
     snippet: studio-rpc-usb-uart # ZMK Studio を USB 経由で使うため（central 側のみ）
     artifact-name: eyelash_sofle_left_display
   - board: eyelash_sofle_right
