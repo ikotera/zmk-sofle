@@ -170,6 +170,31 @@ final class RecorderTests: XCTestCase {
         XCTAssertEqual(KeyCodes.name(usage: 0x1F), "2")
     }
 
+    /// 2026-10-14 01:05 の再現: 記録アプリが約 1.2 秒止まり、解放・リピート・次のキーがまとめて届いた。
+    /// 届いた順（解放が先）ではなく、発生した順で判定する
+    func testBatchedDeliveryIsJudgedByEventTime() {
+        let r = recorder()
+        r.feed(.firmware(pressed: [posA], layerMask: 1), at: 0)
+        r.feed(.hid(usage: 0x04, down: true), at: 0.01)
+        r.feed(.os(keyCode: 0, down: true, autorepeat: false), at: 0.02)
+        let arrival = 1.25
+        r.feed(.hid(usage: 0x04, down: false), at: 1.20, deliveredAt: arrival)
+        r.feed(.firmware(pressed: [], layerMask: 1), at: 1.21, deliveredAt: arrival)
+        var found: [Finding] = []
+        for i in 0..<9 {
+            found += r.feed(.os(keyCode: 0, down: true, autorepeat: true), at: 0.5 + Double(i) * 0.083, deliveredAt: arrival)
+        }
+        XCTAssertTrue(found.contains { if case .deliveryDelay = $0 { return true } else { return false } })
+        let verdicts: [Verdict] = found.compactMap { if case let .repeatBurst(_, _, _, v) = $0 { return v } else { return nil } }
+        XCTAssertEqual(verdicts, [.keyboardHolding])  // 8 回目のリピートの時点では、キーボードも Mac もまだ押下中
+    }
+
+    func testClockNormalize() {
+        let now = 1000.0
+        XCTAssertEqual(Clock.normalize(UInt64(999.5 * 1e9), now: now), 999.5, accuracy: 1e-6)  // ナノ秒
+        XCTAssertEqual(Clock.normalize(0, now: now), now)  // 解釈できなければ現在時刻
+    }
+
     func testRingKeepsOnlyRecentEvents() {
         var cfg = RecorderConfig()
         cfg.ringSeconds = 5

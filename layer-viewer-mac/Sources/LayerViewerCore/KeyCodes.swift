@@ -50,3 +50,26 @@ public enum KeyCodes {
         return named[usage] ?? String(format: "usage 0x%02X", usage)
     }
 }
+
+/// 観測の時刻をシステムの稼働時間（秒。`ProcessInfo.systemUptime` と同じ基準）にそろえる
+public enum Clock {
+    private static let timebase: (numer: Double, denom: Double) = {
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        return (Double(tb.numer), Double(tb.denom))
+    }()
+
+    /// mach_absolute_time の刻み（IOHID の時刻）を秒に
+    public static func seconds(machTicks: UInt64) -> Double {
+        Double(machTicks) * timebase.numer / timebase.denom / 1e9
+    }
+
+    /// 単位がはっきりしない時刻（CGEvent の timestamp はナノ秒とされるが、環境により mach の刻みのことがある）を、
+    /// 現在時刻 now に近い方の解釈で秒にする。どちらも合わなければ now を使う
+    public static func normalize(_ raw: UInt64, now: Double) -> Double {
+        for s in [Double(raw) / 1e9, seconds(machTicks: raw)] where s <= now + 0.5 && now - s < 60 {
+            return s
+        }
+        return now
+    }
+}

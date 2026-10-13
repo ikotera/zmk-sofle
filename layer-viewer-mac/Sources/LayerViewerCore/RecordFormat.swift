@@ -28,12 +28,15 @@ public enum RecordFormat {
             return String(format: "長押し（Mac の HID）: %@ が %.1f 秒以上押下中", KeyCodes.name(usage: usage), seconds)
         case .userMark:
             return "利用者の印"
+        case let .deliveryDelay(seconds):
+            return String(format: "配送の遅れ: 観測が %.2f 秒遅れて記録アプリに届いた（アプリが止まっていた、またはまとめて届いた）", seconds)
         }
     }
 
     /// 直近の観測の1行（incident ファイルに書き出す）。t0 は異常の時刻で、そこからの相対秒を付ける
     public static func describe(_ e: TimedEvent, relativeTo t0: Double) -> String {
-        let rel = String(format: "%+8.3f", e.time - t0)
+        let lag = e.delivered - e.time
+        let rel = String(format: "%+8.3f", e.time - t0) + (lag >= 0.05 ? String(format: " (届くまで %.3f)", lag) : "")
         switch e.event {
         case let .firmware(pressed, mask):
             let keys = pressed.sorted().map(String.init).joined(separator: ",")

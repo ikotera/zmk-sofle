@@ -18,7 +18,8 @@ enum InputMonitoring {
 final class SofleKeyboardMonitor {
     static let vendorId = 0x1D50, productId = 0x615E
 
-    var onKey: ((_ usage: Int, _ down: Bool) -> Void)?
+    /// time はカーネルが受け取った時刻（秒、システムの稼働時間）
+    var onKey: ((_ usage: Int, _ down: Bool, _ time: Double) -> Void)?
     private var manager: IOHIDManager?
 
     /// 開けたら true（入力監視の許可が無いと開けない）
@@ -38,7 +39,7 @@ final class SofleKeyboardMonitor {
             let usage = Int(IOHIDElementGetUsage(element))
             guard (0x04...0xE7).contains(usage) else { return }  // 0xFFFFFFFF 等の「キー無し」を除く
             Unmanaged<SofleKeyboardMonitor>.fromOpaque(ctx!).takeUnretainedValue()
-                .onKey?(usage, IOHIDValueGetIntegerValue(value) != 0)
+                .onKey?(usage, IOHIDValueGetIntegerValue(value) != 0, Clock.seconds(machTicks: IOHIDValueGetTimeStamp(value)))
         }, ctx)
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
         guard IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else {
@@ -58,7 +59,8 @@ final class SofleKeyboardMonitor {
 }
 
 final class KeyEventTap {
-    var onKey: ((_ keyCode: Int, _ down: Bool, _ autorepeat: Bool) -> Void)?
+    /// rawTime は CGEvent の timestamp（単位は Clock.normalize で解釈する）
+    var onKey: ((_ keyCode: Int, _ down: Bool, _ autorepeat: Bool, _ rawTime: UInt64) -> Void)?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -75,7 +77,7 @@ final class KeyEventTap {
                 if let t = me.tap { CGEvent.tapEnable(tap: t, enable: true) }  // 止められたら戻す
             case .keyDown, .keyUp:
                 me.onKey?(Int(event.getIntegerValueField(.keyboardEventKeycode)), type == .keyDown,
-                          event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+                          event.getIntegerValueField(.keyboardEventAutorepeat) != 0, event.timestamp)
             default: break
             }
             return Unmanaged.passUnretained(event)
@@ -122,7 +124,8 @@ enum RecordStore {
         var lines = ["Layer Viewer v\(version)  \(RecordFormat.timestamp(date))",
                      RecordFormat.describe(finding),
                      "", "時刻は異常を検出した瞬間からの相対秒（負は前）:"]
-        lines += ring.map { RecordFormat.describe($0, relativeTo: t) }
+        // 届いた順ではなく発生した順に並べる。「届くまで」は記録アプリに届くまでの遅れ
+        lines += ring.sorted { $0.time < $1.time }.map { RecordFormat.describe($0, relativeTo: t) }
         try? Data((lines.joined(separator: "\n") + "\n").utf8).write(to: folder.appendingPathComponent(name))
         return name
     }

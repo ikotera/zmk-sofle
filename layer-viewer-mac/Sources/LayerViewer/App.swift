@@ -41,7 +41,8 @@ enum Settings {
 // MARK: - Raw HID（ファームウェアの src/layer_report.c からの通知）
 
 final class HIDLink {
-    var onReport: ((_ layerMask: UInt32, _ pressed: Set<Int>) -> Void)?
+    /// time はカーネルがレポートを受け取った時刻（秒、システムの稼働時間）
+    var onReport: ((_ layerMask: UInt32, _ pressed: Set<Int>, _ time: Double) -> Void)?
     var onConnection: ((_ name: String?) -> Void)?
 
     private let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -69,18 +70,25 @@ final class HIDLink {
         }
     }
 
+    /// 購読の要求。IOHIDDeviceSetReport はキーボードの応答を待ってメインスレッドを止めるので、
+    /// 応答を待たない版を使う（キーボードの応答が遅れたときに、表示と記録まで止まらないように。v1.1.1）
+    private static let request: UnsafeMutablePointer<UInt8> = {
+        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: 32)
+        p.initialize(repeating: 0, count: 32)
+        p[0] = 0x4C
+        return p
+    }()
+
     private func requestState(_ device: IOHIDDevice) {
-        var req = [UInt8](repeating: 0, count: 32)
-        req[0] = 0x4C
-        IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0, &req, req.count)
+        IOHIDDeviceSetReportWithCallback(device, kIOHIDReportTypeOutput, 0, Self.request, 32, 1.0, { _, _, _, _, _, _, _ in }, nil)
     }
 
     private func attach(_ device: IOHIDDevice) {
         devices.append(device)
         let ctx = Unmanaged.passUnretained(self).toOpaque()
-        IOHIDDeviceRegisterInputReportCallback(device, buffer, 64, { ctx, _, _, _, _, report, length in
+        IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, buffer, 64, { ctx, _, _, _, _, report, length, stamp in
             Unmanaged<HIDLink>.fromOpaque(ctx!).takeUnretainedValue()
-                .handle(UnsafeBufferPointer(start: report, count: length))
+                .handle(UnsafeBufferPointer(start: report, count: length), time: Clock.seconds(machTicks: stamp))
         }, ctx)
         onConnection?(IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "Keyboard")
         requestState(device)  // 接続直後に現在の状態を問い合わせる
@@ -91,7 +99,7 @@ final class HIDLink {
         if devices.isEmpty { onConnection?(nil) }
     }
 
-    private func handle(_ r: UnsafeBufferPointer<UInt8>) {
+    private func handle(_ r: UnsafeBufferPointer<UInt8>, time: Double) {
         guard r.count >= 8, r[0] == 0x4C else { return }
         let mask = UInt32(r[4]) | UInt32(r[5]) << 8 | UInt32(r[6]) << 16 | UInt32(r[7]) << 24
         var pressed = Set<Int>()
@@ -100,7 +108,7 @@ final class HIDLink {
                 for b in 0..<8 where r[i] & (1 << b) != 0 { pressed.insert((i - 8) * 8 + b) }
             }
         }
-        onReport?(mask | 1, pressed)
+        onReport?(mask | 1, pressed, time)
     }
 }
 
@@ -297,12 +305,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(NSStringFromPoint(self.panel.frame.origin), forKey: "origin")
         }
 
-        hid.onReport = { [weak self] mask, pressed in
+        hid.onReport = { [weak self] mask, pressed, time in
             guard let self else { return }
             self.view.layerMask = mask
             self.view.pressed = pressed
             self.view.needsDisplay = true
-            if self.view.recording { self.handle(self.recorder.feed(.firmware(pressed: pressed, layerMask: mask), at: self.now)) }
+            if self.view.recording {
+                self.handle(self.recorder.feed(.firmware(pressed: pressed, layerMask: mask), at: time, deliveredAt: self.now))
+            }
         }
         hid.onConnection = { [weak self] name in
             guard let self else { return }
@@ -312,13 +322,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hid.start()
 
-        keyboardMonitor.onKey = { [weak self] usage, down in
+        keyboardMonitor.onKey = { [weak self] usage, down, time in
             guard let self else { return }
-            self.handle(self.recorder.feed(.hid(usage: usage, down: down), at: self.now))
+            self.handle(self.recorder.feed(.hid(usage: usage, down: down), at: time, deliveredAt: self.now))
         }
-        eventTap.onKey = { [weak self] keyCode, down, autorepeat in
+        eventTap.onKey = { [weak self] keyCode, down, autorepeat, rawTime in
             guard let self else { return }
-            self.handle(self.recorder.feed(.os(keyCode: keyCode, down: down, autorepeat: autorepeat), at: self.now))
+            let now = self.now
+            self.handle(self.recorder.feed(.os(keyCode: keyCode, down: down, autorepeat: autorepeat),
+                                           at: Clock.normalize(rawTime, now: now), deliveredAt: now))
         }
 
         setupMenu()
