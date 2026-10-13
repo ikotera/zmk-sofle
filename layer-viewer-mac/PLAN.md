@@ -289,9 +289,9 @@ layer-viewer-mac/            Swift パッケージ
 | 2026-10-13 | Karabiner-Elements は「キーボード兼ポインティングデバイス」（ZMK のマウスキー有効時）を既定で横取りしない。ログの grabbed 行と `karabiner_cli --list-connected-devices` で確かめる | R-005 | distill 済み → [[止まらないキーリピートの切り分け]] |
 | 2026-10-13 | 入力監視の許可をアプリに出すと、macOS の「終了して再度開く」が同じバンドル ID の別の場所のアプリを開くことがある（推測。build/ の版を許可したら ~/Applications の旧版が開いた） | S1 | distill 済み → [[macOSの入力監視の許可とコード署名]] |
 | 2026-10-13 | 読むだけのイベントタップでも、送り手の CGEvent に `keyboardEventAutorepeat` を付ければキーリピートを擬似的に作れる。記録機能の通しの確認に使える | S1 | distill 済み → [[macOS GUIアプリの自動操作テスト]] |
-| 2026-10-14 | 入力の記録では、コールバックで受け取った時刻ではなく、カーネルが受け取った時刻（IOHIDValueGetTimeStamp 等）を使う。アプリが止まると観測がまとめて届き、受け取った順の判定は誤る | S2 | 候補 |
-| 2026-10-14 | `IOHIDDeviceSetReport` は同期呼び出しで、相手の機器が応答しないと呼び出し元を止める。定期的な送信は専用のキューで行う。`IOHIDDeviceSetReportWithCallback` に替えたら入力レポートが届かなくなった（原因は未解明） | S2 | 候補 |
-| 2026-10-14 | zsh の環境によっては `log` が別のコマンドに隠れる（`log: too many arguments`）。統合ログは `/usr/bin/log show` で読む。時刻の指定は秒まで（小数は不可） | S2 | 候補 |
+| 2026-10-14 | 入力の記録では、コールバックで受け取った時刻ではなく、カーネルが受け取った時刻（IOHIDValueGetTimeStamp 等）を使う。アプリが止まると観測がまとめて届き、受け取った順の判定は誤る | S2 | distill 済み → [[IOKit HIDの観測時刻と同期送信]] |
+| 2026-10-14 | `IOHIDDeviceSetReport` は同期呼び出しで、相手の機器が応答しないと呼び出し元を止める。定期的な送信は専用のキューで行う。`IOHIDDeviceSetReportWithCallback` に替えたら入力レポートが届かなくなった（原因は未解明） | S2 | distill 済み → [[IOKit HIDの観測時刻と同期送信]] |
+| 2026-10-14 | zsh の環境によっては `log` が別のコマンドに隠れる（`log: too many arguments`）。統合ログは `/usr/bin/log show` で読む。時刻の指定は秒まで（小数は不可） | S2 | distill 済み → [[IOKit HIDの観測時刻と同期送信]] |
 | 2026-10-13 | Apple Development の証明書で署名すると、ad-hoc 署名と違って TCC（入力監視など）の許可が再ビルド後も残る（推測。再インストール後に許可を出し直さずに記録が始まった） | S1 | distill 済み → [[macOSの入力監視の許可とコード署名]] |
 
 ---
@@ -301,4 +301,5 @@ layer-viewer-mac/            Swift パッケージ
 | 日付 | 内容 |
 |---|---|
 | 2026-10-13 | 初版作成（S0 を遡って記録、S1 を設計・完了） |
+| 2026-10-14 | §12 の台帳（S2 の3件）を distill（knowledge-base の [[Layer Viewerの記録の時刻の精度]]） |
 | 2026-10-13 | §12 の台帳を distill（knowledge-base の [[Layer Viewerのキーリピート記録機能]]）。§11.2 に記録中の計測値を追加。`scripts/bump_version.sh` の最後の表示で全角括弧が変数名に混ざる不具合を修正（タグは付いていた） |
