@@ -2,18 +2,22 @@
 // 修飾付きのキーは「Shift+2」ではなく、実際に入力される文字（例: @）にする。
 import Foundation
 
-enum HostLayout: String { case us, jis }
+public enum HostLayout: String { case us, jis }
 
-enum LabelKind { case char, mod, layer, sys, trans, none }
+public enum LabelKind { case char, mod, layer, sys, trans, none }
 
-struct KeyLabel {
-    var main: String
-    var shift: String? = nil  // Shift を押したときに出る文字（補助表示）
-    var hold: String? = nil   // ホールド時の動作（Layer-Tap / Mod-Tap）
-    var kind: LabelKind = .char
+public struct KeyLabel: Equatable {
+    public var main: String
+    public var shift: String? = nil  // Shift を押したときに出る文字（補助表示）
+    public var hold: String? = nil   // ホールド時の動作（Layer-Tap / Mod-Tap）
+    public var kind: LabelKind = .char
+
+    public init(main: String, shift: String? = nil, hold: String? = nil, kind: LabelKind = .char) {
+        self.main = main; self.shift = shift; self.hold = hold; self.kind = kind
+    }
 }
 
-enum Labels {
+public enum Labels {
     // [通常, Shift] の組。ホスト OS の配列設定によって変わる部分だけ US / JIS で分ける。
     private static let common: [Int: (String, String)] = {
         var t: [Int: (String, String)] = [0x2c: ("Space", "Space")]
@@ -60,7 +64,7 @@ enum Labels {
     ]
     private static let modBits: [(UInt32, String)] = [(0x11, "⌃"), (0x44, "⌥"), (0x22, "⇧"), (0x88, "⌘")]
 
-    static func char(_ id: Int, shifted: Bool, host: HostLayout) -> String? {
+    public static func char(_ id: Int, shifted: Bool, host: HostLayout) -> String? {
         guard let pair = common[id] ?? (host == .jis ? jis : us)[id] else { return nil }
         return shifted ? pair.1 : pair.0
     }
@@ -70,7 +74,7 @@ enum Labels {
     }
 
     /// ZMK のキーコード（上位 8bit = 修飾, 次の 8bit = Usage Page, 下位 16bit = Usage ID）
-    static func key(_ code: UInt32, host: HostLayout) -> KeyLabel {
+    public static func key(_ code: UInt32, host: HostLayout) -> KeyLabel {
         let mods = (code >> 24) & 0xff, page = (code >> 16) & 0xff, id = Int(code & 0xffff)
         if page == 0x0c { return KeyLabel(main: consumer[id] ?? String(format: "C:%x", id)) }
         guard page == 0x07 else { return KeyLabel(main: String(format: "?%x", code)) }
@@ -100,7 +104,7 @@ enum Labels {
         return (y < 0 ? "↑" : y > 0 ? "↓" : "") + (x < 0 ? "←" : x > 0 ? "→" : "")
     }
 
-    static func label(_ b: Binding, km: KeymapData, host: HostLayout) -> KeyLabel {
+    public static func label(_ b: Binding, km: KeymapData, host: HostLayout) -> KeyLabel {
         let name = km.behaviors[String(b.behaviorId)] ?? ""
         func layerName(_ id: UInt32) -> String { km.layers.first { $0.id == Int(id) }?.name ?? "L\(id)" }
         func pick(_ t: [String], _ i: UInt32, _ d: String) -> String { Int(i) < t.count ? t[Int(i)] : d }

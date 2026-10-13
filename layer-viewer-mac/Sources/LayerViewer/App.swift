@@ -2,7 +2,11 @@
 // アクティブなレイヤーと押下中のキーを、常に最前面の小窓に表示する。
 import AppKit
 import IOKit.hid
+import LayerViewerCore
 import ServiceManagement
+
+/// 版（Info.plist の CFBundleShortVersionString。build.sh が VERSION ファイルから入れる）
+let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
 
 // MARK: - 設定
 
@@ -27,6 +31,10 @@ enum Settings {
     static var clickThrough: Bool {
         get { d.bool(forKey: "clickThrough") }
         set { d.set(newValue, forKey: "clickThrough") }
+    }
+    static var recording: Bool {
+        get { d.object(forKey: "recording") as? Bool ?? true }
+        set { d.set(newValue, forKey: "recording") }
     }
 }
 
@@ -104,6 +112,7 @@ final class KeyboardView: NSView {
     var pressed = Set<Int>()
     var connected: String?
     var message: String?
+    var recording = false
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { true }
@@ -133,10 +142,6 @@ final class KeyboardView: NSView {
         return keys.isEmpty ? CGRect(x: 0, y: 0, width: 14, height: 5) : CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    private func activeIndices(_ km: KeymapData) -> [Int] {
-        km.layers.indices.filter { $0 == 0 || (km.layers[$0].id < 32 && layerMask >> UInt32(km.layers[$0].id) & 1 == 1) }
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         let bg = NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10)
         cBg.withAlphaComponent(0.96).setFill()
@@ -147,7 +152,7 @@ final class KeyboardView: NSView {
                  at: CGPoint(x: bounds.midX, y: bounds.midY), size: 12, color: cMuted)
             return
         }
-        let active = activeIndices(km)
+        let active = km.activeIndices(layerMask: layerMask)
         let top = active.last ?? 0
         drawHeader(km, active: active, top: top)
 
@@ -157,14 +162,9 @@ final class KeyboardView: NSView {
 
         for (pos, k) in km.keys.enumerated() {
             // 透過キーは下のアクティブなレイヤーへ落ちる（ZMK と同じ解決順）
-            var binding: Binding?, from = top
-            for idx in active.reversed() {
-                guard pos < km.layers[idx].bindings.count else { continue }
-                let bd = km.layers[idx].bindings[pos]
-                if km.behaviors[String(bd.behaviorId)] == "Transparent" && idx != 0 { continue }
-                binding = bd; from = idx; break
-            }
-            let lab = binding.map { Labels.label($0, km: km, host: host) } ?? KeyLabel(main: "", kind: .none)
+            let resolved = km.resolve(position: pos, layerMask: layerMask)
+            let from = resolved?.layerIndex ?? top
+            let lab = resolved.map { Labels.label($0.binding, km: km, host: host) } ?? KeyLabel(main: "", kind: .none)
             let isPressed = pressed.contains(pos)
 
             NSGraphicsContext.saveGraphicsState()
@@ -230,14 +230,19 @@ final class KeyboardView: NSView {
             text(l.name, at: CGPoint(x: chip.midX, y: y), size: 11, color: isTop ? .white : cMuted, weight: isTop ? .bold : .regular)
             x += chip.width + 4
         }
-        // 右上：レイヤー通知の接続状態
+        // 右上：レイヤー通知の接続状態、版、メッセージ
         let dot = CGRect(x: bounds.maxX - Self.margin - 12, y: y - 4, width: 8, height: 8)
         (connected != nil ? cOk : cDim).setFill()
         NSBezierPath(ovalIn: dot).fill()
+        let font = NSFont.systemFont(ofSize: 10)
+        var right = dot.minX - 6
+        let status = (recording ? "● 記録中  " : "") + "v\(appVersion)"
+        let sw = (status as NSString).size(withAttributes: [.font: font]).width
+        text(status, at: CGPoint(x: right - sw / 2, y: y), size: 10, color: cDim)
+        right -= sw + 10
         if let message {
-            let font = NSFont.systemFont(ofSize: 10)
             let w = (message as NSString).size(withAttributes: [.font: font]).width
-            text(message, at: CGPoint(x: dot.minX - 6 - w / 2, y: y), size: 10, color: cMuted)
+            text(message, at: CGPoint(x: right - w / 2, y: y), size: 10, color: cMuted)
         }
     }
 
@@ -256,6 +261,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hid = HIDLink()
     private var statusItem: NSStatusItem!
     private var fetching = false
+
+    // 記録（キーリピートの調査）
+    private let keyboardMonitor = SofleKeyboardMonitor()
+    private let eventTap = KeyEventTap()
+    private lazy var recorder = Recorder { [weak self] position, mask in
+        self?.view.km?.hidUsage(position: position, layerMask: mask)
+    }
+    private var tickTimer: Timer?
+    private var permissionPoll: Timer?
+    private var now: Double { ProcessInfo.processInfo.systemUptime }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -287,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.view.layerMask = mask
             self.view.pressed = pressed
             self.view.needsDisplay = true
+            if self.view.recording { self.handle(self.recorder.feed(.firmware(pressed: pressed, layerMask: mask), at: self.now)) }
         }
         hid.onConnection = { [weak self] name in
             guard let self else { return }
@@ -296,8 +312,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hid.start()
 
+        keyboardMonitor.onKey = { [weak self] usage, down in
+            guard let self else { return }
+            self.handle(self.recorder.feed(.hid(usage: usage, down: down), at: self.now))
+        }
+        eventTap.onKey = { [weak self] keyCode, down, autorepeat in
+            guard let self else { return }
+            self.handle(self.recorder.feed(.os(keyCode: keyCode, down: down, autorepeat: autorepeat), at: self.now))
+        }
+
         setupMenu()
         if view.km == nil { fetchKeymap() }
+        if Settings.recording { startRecording() }
+    }
+
+    // MARK: 記録
+
+    private func startRecording() {
+        if !InputMonitoring.granted { InputMonitoring.request() }  // 初回はシステムの確認ダイアログが出る
+        let keyboardOK = keyboardMonitor.start()
+        let tapOK = eventTap.start()
+        guard keyboardOK && tapOK else {
+            keyboardMonitor.stop(); eventTap.stop()
+            view.recording = false
+            flash("記録には入力監視の許可が必要です（⌨ →「入力監視の設定を開く」）")
+            // 許可されたら自動で始める
+            permissionPoll?.invalidate()
+            permissionPoll = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] t in
+                guard InputMonitoring.granted else { return }
+                t.invalidate()
+                self?.startRecording()
+            }
+            return
+        }
+        permissionPoll?.invalidate()
+        view.recording = true
+        view.needsDisplay = true
+        // 長押しは時間の経過で分かるので、記録中だけ定期的に調べる
+        tickTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.handle(self.recorder.tick(at: self.now))
+        }
+        RecordStore.append("\(RecordFormat.timestamp(Date())) 記録を開始（v\(appVersion)）")
+    }
+
+    private func stopRecording() {
+        keyboardMonitor.stop(); eventTap.stop()
+        tickTimer?.invalidate(); permissionPoll?.invalidate()
+        view.recording = false
+        view.needsDisplay = true
+        RecordStore.append("\(RecordFormat.timestamp(Date())) 記録を停止")
+    }
+
+    private func handle(_ findings: [Finding]) {
+        for f in findings {
+            RecordStore.append(RecordFormat.line(f, at: Date()))
+            var dump = false
+            switch f {
+            case let .repeatBurst(_, _, _, verdict): dump = verdict != .keyboardHolding  // 意図した長押しは1行だけ
+            case .userMark: dump = true
+            default: break
+            }
+            if dump {
+                let name = RecordStore.writeIncident(f, ring: recorder.ring, at: now, date: Date(), version: appVersion)
+                flash("記録しました: \(name)")
+            }
+        }
+    }
+
+    private func flash(_ message: String) {
+        view.message = message
+        view.needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.view.message == message else { return }
+            self.view.message = nil
+            self.view.needsDisplay = true
+        }
     }
 
     private func applyWindowSettings() {
@@ -372,7 +462,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         item("クリックを透過（ドラッグ移動不可）", #selector(toggleClickThrough), on: Settings.clickThrough)
         m.addItem(.separator())
+        item("記録（キーリピートの調査）", #selector(toggleRecording), on: view.recording)
+        item("いま異常が起きた（印を付ける）", #selector(markNow))
+        item("記録フォルダを開く", #selector(openRecords))
+        item("入力監視の設定を開く", #selector(openInputMonitoring))
+        m.addItem(.separator())
         item("ログイン時に起動", #selector(toggleLogin), on: SMAppService.mainApp.status == .enabled)
+        let version = NSMenuItem(title: "Layer Viewer v\(appVersion)", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        m.addItem(version)
         m.addItem(NSMenuItem(title: "終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = m
     }
@@ -382,6 +480,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
     @objc private func refetch() { fetchKeymap() }
+    @objc private func toggleRecording() {
+        Settings.recording.toggle()
+        Settings.recording ? startRecording() : stopRecording()
+        rebuildMenu()
+    }
+    @objc private func markNow() {
+        guard view.recording else { return flash("記録が止まっています") }
+        handle(recorder.feed(.mark, at: now))
+    }
+    @objc private func openRecords() { NSWorkspace.shared.open(RecordStore.folder) }
+    @objc private func openInputMonitoring() { InputMonitoring.openSettings() }
     @objc private func setHost(_ s: NSMenuItem) { Settings.host = s.tag == 1 ? .jis : .us; changed() }
     @objc private func toggleShift() { Settings.showShift.toggle(); changed() }
     @objc private func setSize(_ s: NSMenuItem) { Settings.unit = [30.0, 40.0, 52.0][s.tag]; resize(); changed() }

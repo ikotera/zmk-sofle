@@ -4,41 +4,54 @@ import Foundation
 
 // MARK: - データモデル（取得結果。JSON でキャッシュする）
 
-struct KeyAttr: Codable {
-    var width = 0, height = 0, x = 0, y = 0, r = 0, rx = 0, ry = 0  // 1/100 キー単位, r は 1/100 度
+public struct KeyAttr: Codable, Equatable {
+    public var width = 0, height = 0, x = 0, y = 0, r = 0, rx = 0, ry = 0  // 1/100 キー単位, r は 1/100 度
+    public init(width: Int = 100, height: Int = 100, x: Int = 0, y: Int = 0, r: Int = 0, rx: Int = 0, ry: Int = 0) {
+        self.width = width; self.height = height; self.x = x; self.y = y; self.r = r; self.rx = rx; self.ry = ry
+    }
 }
 
-struct Binding: Codable {
-    var behaviorId = 0
-    var param1: UInt32 = 0
-    var param2: UInt32 = 0
+public struct Binding: Codable, Equatable {
+    public var behaviorId = 0
+    public var param1: UInt32 = 0
+    public var param2: UInt32 = 0
+    public init(behaviorId: Int = 0, param1: UInt32 = 0, param2: UInt32 = 0) {
+        self.behaviorId = behaviorId; self.param1 = param1; self.param2 = param2
+    }
 }
 
-struct Layer: Codable {
-    var id = 0
-    var name = ""
-    var bindings: [Binding] = []
+public struct Layer: Codable, Equatable {
+    public var id = 0
+    public var name = ""
+    public var bindings: [Binding] = []
+    public init(id: Int = 0, name: String = "", bindings: [Binding] = []) {
+        self.id = id; self.name = name; self.bindings = bindings
+    }
 }
 
-struct KeymapData: Codable {
-    var savedAt = Date()
-    var keys: [KeyAttr] = []
-    var layers: [Layer] = []
-    var behaviors: [String: String] = [:]  // behavior id → 表示名
+public struct KeymapData: Codable {
+    public var savedAt = Date()
+    public var keys: [KeyAttr] = []
+    public var layers: [Layer] = []
+    public var behaviors: [String: String] = [:]  // behavior id → 表示名
 
-    static var cacheURL: URL {
+    public init(keys: [KeyAttr] = [], layers: [Layer] = [], behaviors: [String: String] = [:]) {
+        self.keys = keys; self.layers = layers; self.behaviors = behaviors
+    }
+
+    public static var cacheURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("LayerViewer", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("keymap.json")
     }
 
-    static func loadCache() -> KeymapData? {
+    public static func loadCache() -> KeymapData? {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }
         return try? JSONDecoder().decode(KeymapData.self, from: data)
     }
 
-    func saveCache() {
+    public func saveCache() {
         if let data = try? JSONEncoder().encode(self) { try? data.write(to: Self.cacheURL) }
     }
 }
@@ -121,9 +134,9 @@ extension Array where Element == ProtoField {
     func all(_ n: Int) -> [ProtoField] { filter { $0.number == n } }
 }
 
-enum StudioError: LocalizedError {
+public enum StudioError: LocalizedError {
     case noPort, busy(String), timeout, decode, locked, rpc(String)
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .noPort: return "キーボードのシリアルポートが見つかりません（左手を USB 接続してください）"
         case .busy(let p): return "\(p) を開けません（ZMK Studio アプリを閉じてください）"
@@ -137,7 +150,7 @@ enum StudioError: LocalizedError {
 
 // MARK: - シリアル接続と RPC
 
-final class StudioClient {
+public final class StudioClient {
     private let fd: Int32
     private var nextId: UInt64 = 1
     private var rx: [UInt8] = []
@@ -218,7 +231,7 @@ final class StudioClient {
 
     // MARK: キーマップ一式の取得
 
-    static func fetchKeymap() throws -> KeymapData {
+    public static func fetchKeymap() throws -> KeymapData {
         let ports = (try? FileManager.default.contentsOfDirectory(atPath: "/dev"))?
             .filter { $0.hasPrefix("cu.usbmodem") }.sorted().map { "/dev/" + $0 } ?? []
         guard !ports.isEmpty else { throw StudioError.noPort }
