@@ -18,6 +18,7 @@
  * 待ち行列があふれてキー解放が失われる（＝キーが押しっぱなしになる）おそれがあるため。
  */
 
+#include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
