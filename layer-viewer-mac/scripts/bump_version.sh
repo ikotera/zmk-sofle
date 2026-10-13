@@ -42,4 +42,4 @@ git add VERSION
 [[ -f PLAN.md ]] && git add PLAN.md
 git commit -m "layer-viewer v$next: $summary"
 git tag -a "$tag" -m "layer-viewer v$next: $summary"
-echo "版: v$current → v$next（タグ $tag）。push: git push origin main --follow-tags"
+echo "版: v${current} → v${next}（タグ ${tag}）。push: git push origin main --follow-tags"
