@@ -213,7 +213,8 @@ layer-viewer-mac/            Swift パッケージ
   - 観測の時刻をカーネルが受け取った時刻にした（Raw HID は `IOHIDDeviceRegisterInputReportWithTimeStampCallback`、HID は `IOHIDValueGetTimeStamp`、キーイベントは CGEvent の timestamp）。記録アプリに届いた時刻も別に持つ。
   - 判定は、記録した観測を発生した順に並べ直し、リピートの時点までに発生したものだけで行う。
   - 0.5 秒以上遅れて届いた観測があれば「配送の遅れ」として1行記録する。incident ファイルの各行には「届くまで」の秒数を付ける。
-  - 購読の要求を `IOHIDDeviceSetReportWithCallback`（応答を待たない、タイムアウト 1 秒）にした。
+  - 購読の要求を、メインスレッドではなく専用のキューで送るようにした（前の要求の応答待ちなら重ねない）。最初は応答を待たない `IOHIDDeviceSetReportWithCallback` にしたが、このアプリでは以後の入力レポートが届かなくなった（同じ呼び出しを単体のプログラムで試すと届いた。原因は未解明）。
+  - 調査用に、`LAYERVIEWER_DEBUG=1` で起動すると Raw HID の接続・要求・受信を標準エラー出力に出す。
 - 次に発生したときに分かること: キーボードの報告と Mac の HID の「発生した時刻」で、`u` の解放がいつ Mac に届いたかが分かる。解放の発生時刻が遅ければキーボード側（右手との通信、または左手の停止）、早ければ macOS 側。
 
 ### 8.x 流用元と実装メモ
@@ -286,7 +287,7 @@ layer-viewer-mac/            Swift パッケージ
 | 2026-10-13 | 入力監視の許可をアプリに出すと、macOS の「終了して再度開く」が同じバンドル ID の別の場所のアプリを開くことがある（推測。build/ の版を許可したら ~/Applications の旧版が開いた） | S1 | distill 済み → [[macOSの入力監視の許可とコード署名]] |
 | 2026-10-13 | 読むだけのイベントタップでも、送り手の CGEvent に `keyboardEventAutorepeat` を付ければキーリピートを擬似的に作れる。記録機能の通しの確認に使える | S1 | distill 済み → [[macOS GUIアプリの自動操作テスト]] |
 | 2026-10-14 | 入力の記録では、コールバックで受け取った時刻ではなく、カーネルが受け取った時刻（IOHIDValueGetTimeStamp 等）を使う。アプリが止まると観測がまとめて届き、受け取った順の判定は誤る | S2 | 候補 |
-| 2026-10-14 | `IOHIDDeviceSetReport` は同期呼び出しで、相手の機器が応答しないとメインスレッドを止める。定期的な送信には `IOHIDDeviceSetReportWithCallback` を使う | S2 | 候補 |
+| 2026-10-14 | `IOHIDDeviceSetReport` は同期呼び出しで、相手の機器が応答しないと呼び出し元を止める。定期的な送信は専用のキューで行う。`IOHIDDeviceSetReportWithCallback` に替えたら入力レポートが届かなくなった（原因は未解明） | S2 | 候補 |
 | 2026-10-14 | zsh の環境によっては `log` が別のコマンドに隠れる（`log: too many arguments`）。統合ログは `/usr/bin/log show` で読む。時刻の指定は秒まで（小数は不可） | S2 | 候補 |
 | 2026-10-13 | Apple Development の証明書で署名すると、ad-hoc 署名と違って TCC（入力監視など）の許可が再ビルド後も残る（推測。再インストール後に許可を出し直さずに記録が始まった） | S1 | distill 済み → [[macOSの入力監視の許可とコード署名]] |
 

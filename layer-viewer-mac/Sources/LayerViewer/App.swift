@@ -6,6 +6,8 @@ import LayerViewerCore
 import ServiceManagement
 
 /// 版（Info.plist の CFBundleShortVersionString。build.sh が VERSION ファイルから入れる）
+/// LAYERVIEWER_DEBUG=1 で起動すると、観測の流れを標準エラー出力に出す（調査用）
+let debugLog = ProcessInfo.processInfo.environment["LAYERVIEWER_DEBUG"] != nil
 let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
 
 // MARK: - 設定
@@ -70,21 +72,31 @@ final class HIDLink {
         }
     }
 
-    /// 購読の要求。IOHIDDeviceSetReport はキーボードの応答を待ってメインスレッドを止めるので、
-    /// 応答を待たない版を使う（キーボードの応答が遅れたときに、表示と記録まで止まらないように。v1.1.1）
+    /// 購読の要求。IOHIDDeviceSetReport はキーボードの応答を待って呼び出し元を止めるので、メインスレッドではなく
+    /// 専用のキューで送る（キーボードの応答が遅れたときに、表示と記録まで止まらないように。v1.1.1）。
+    /// 応答を待たない IOHIDDeviceSetReportWithCallback は、このアプリでは以後の入力レポートが届かなくなったので使わない
     private static let request: UnsafeMutablePointer<UInt8> = {
         let p = UnsafeMutablePointer<UInt8>.allocate(capacity: 32)
         p.initialize(repeating: 0, count: 32)
         p[0] = 0x4C
         return p
     }()
+    private let requestQueue = DispatchQueue(label: "layerviewer.raw-hid-request")
+    private var requestInFlight = false  // メインスレッドだけで読み書きする
 
     private func requestState(_ device: IOHIDDevice) {
-        IOHIDDeviceSetReportWithCallback(device, kIOHIDReportTypeOutput, 0, Self.request, 32, 1.0, { _, _, _, _, _, _, _ in }, nil)
+        guard !requestInFlight else { return }  // 前の要求の応答待ちなら重ねない
+        requestInFlight = true
+        if debugLog { FileHandle.standardError.write(Data("raw hid request\n".utf8)) }
+        requestQueue.async { [weak self] in
+            IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0, Self.request, 32)
+            DispatchQueue.main.async { self?.requestInFlight = false }
+        }
     }
 
     private func attach(_ device: IOHIDDevice) {
         devices.append(device)
+        if debugLog { FileHandle.standardError.write(Data("raw hid attach\n".utf8)) }
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, buffer, 64, { ctx, _, _, _, _, report, length, stamp in
             Unmanaged<HIDLink>.fromOpaque(ctx!).takeUnretainedValue()
@@ -100,6 +112,7 @@ final class HIDLink {
     }
 
     private func handle(_ r: UnsafeBufferPointer<UInt8>, time: Double) {
+        if debugLog { FileHandle.standardError.write(Data("raw hid report len=\(r.count) first=\(r.first ?? 0)\n".utf8)) }
         guard r.count >= 8, r[0] == 0x4C else { return }
         let mask = UInt32(r[4]) | UInt32(r[5]) << 8 | UInt32(r[6]) << 16 | UInt32(r[7]) << 24
         var pressed = Set<Int>()
@@ -307,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hid.onReport = { [weak self] mask, pressed, time in
             guard let self else { return }
+            if debugLog { FileHandle.standardError.write(Data("firmware mask=\(mask) pressed=\(pressed.sorted()) t=\(time) now=\(self.now) recording=\(self.view.recording)\n".utf8)) }
             self.view.layerMask = mask
             self.view.pressed = pressed
             self.view.needsDisplay = true
