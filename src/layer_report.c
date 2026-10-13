@@ -9,7 +9,13 @@
  *   [4..7]  レイヤー状態ビットマスク（layer id 単位, little endian）
  *   [8..31] 押下中のキー位置のビットマップ（position 0 = [8] の bit0, 最大 192 キー）
  *
- * ホストから先頭バイト 0x4C のレポートを受け取ると、現在の状態を返す。
+ * ホストから先頭バイト 0x4C のレポートを受け取ると現在の状態を返し、以後
+ * LISTENER_TIMEOUT_MS の間だけ変化を通知する。表示アプリは定期的に送り直して購読を続ける。
+ * アプリが動いていないときは何も送らない。
+ *
+ * 送信は専用の低優先度ワークキューで行う。システムワークキューは右手（peripheral）からの
+ * キーイベント処理にも使われており、そこで USB / BLE の送信待ちが起きると右手のイベント
+ * 待ち行列があふれてキー解放が失われる（＝キーが押しっぱなしになる）おそれがあるため。
  */
 
 #include <zephyr/kernel.h>
@@ -34,6 +40,21 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 // 素早いタップの押下を取りこぼさないよう、前回送信以降に押されたキーも別に覚えておく
 #define TAP_HOLDOVER_MS 60
+#define LISTENER_TIMEOUT_MS 5000
+#define LAYER_REPORT_STACK_SIZE 1024
+#define LAYER_REPORT_PRIORITY K_LOWEST_APPLICATION_THREAD_PRIO
+
+K_THREAD_STACK_DEFINE(layer_report_stack, LAYER_REPORT_STACK_SIZE);
+static struct k_work_q layer_report_q;
+
+static atomic_t last_request_ms;
+
+static bool host_listening(void) {
+    atomic_val_t last = atomic_get(&last_request_ms);
+    // 32bit の稼働時間は約 49 日で一周するので、差を符号付きで見る
+    int32_t elapsed = (int32_t)(k_uptime_get_32() - (uint32_t)last);
+    return last != 0 && elapsed < LISTENER_TIMEOUT_MS;
+}
 
 static ATOMIC_DEFINE(pressed, LAYER_REPORT_MAX_KEYS);
 static ATOMIC_DEFINE(pressed_since_report, LAYER_REPORT_MAX_KEYS);
@@ -63,11 +84,16 @@ static void layer_report_work_handler(struct k_work *work) {
 
     // 押して離したキーを一度「押下中」として送ったので、少し後に解放状態を送り直す
     if (released_unseen) {
-        k_work_schedule(&layer_report_work, K_MSEC(TAP_HOLDOVER_MS));
+        k_work_schedule_for_queue(&layer_report_q, &layer_report_work, K_MSEC(TAP_HOLDOVER_MS));
     }
 }
 
-// 送信はイベント発生元（キースキャン／USB 制御転送）のスレッドを塞がないようワークキューで行う
+static void request_report(void) {
+    if (host_listening()) {
+        k_work_reschedule_for_queue(&layer_report_q, &layer_report_work, K_NO_WAIT);
+    }
+}
+
 static int layer_report_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos = as_zmk_position_state_changed(eh);
     if (pos) {
@@ -78,19 +104,21 @@ static int layer_report_listener(const zmk_event_t *eh) {
             } else {
                 atomic_clear_bit(pressed, pos->position);
             }
-            k_work_reschedule(&layer_report_work, K_NO_WAIT);
+            request_report();
         }
         return ZMK_EV_EVENT_BUBBLE;
     }
 
     if (as_zmk_layer_state_changed(eh)) {
-        k_work_reschedule(&layer_report_work, K_NO_WAIT);
+        request_report();
         return ZMK_EV_EVENT_BUBBLE;
     }
 
     struct raw_hid_received_event *rx = as_raw_hid_received_event(eh);
     if (rx && rx->length > 0 && rx->data[0] == LAYER_REPORT_ID) {
-        k_work_reschedule(&layer_report_work, K_NO_WAIT);
+        // 0 は「未購読」の印なので避ける
+        atomic_set(&last_request_ms, (atomic_val_t)(k_uptime_get_32() | 1));
+        request_report();
     }
 
     return ZMK_EV_EVENT_BUBBLE;
@@ -100,3 +128,12 @@ ZMK_LISTENER(layer_report, layer_report_listener);
 ZMK_SUBSCRIPTION(layer_report, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(layer_report, zmk_position_state_changed);
 ZMK_SUBSCRIPTION(layer_report, raw_hid_received_event);
+
+static int layer_report_init(void) {
+    static const struct k_work_queue_config cfg = {.name = "layer_report"};
+    k_work_queue_start(&layer_report_q, layer_report_stack, K_THREAD_STACK_SIZEOF(layer_report_stack),
+                       LAYER_REPORT_PRIORITY, &cfg);
+    return 0;
+}
+
+SYS_INIT(layer_report_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);

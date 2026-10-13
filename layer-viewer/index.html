@@ -425,11 +425,17 @@ async function attachHid(dev) {
     render();
   };
   setPill("stHid", "レイヤー通知: " + dev.productName, "ok");
-  // 接続直後に現在の状態を問い合わせる
+  await requestState(dev);  // 接続直後に現在の状態を問い合わせる
+}
+
+async function requestState(dev) {
   const req = new Uint8Array(32);
   req[0] = 0x4c;
   try { await dev.sendReport(0, req); } catch (e) { console.warn("状態問い合わせに失敗", e); }
 }
+
+// ファームウェアは最後の問い合わせから 5 秒間だけ通知を送るので、2 秒ごとに購読を続ける
+setInterval(() => { if (state.hidDevice?.opened) requestState(state.hidDevice); }, 2000);
 
 $("btnHid").onclick = async () => {
   if (!navigator.hid) return setPill("stHid", "WebHID 非対応（Chrome / Edge で開いてください）", "err");

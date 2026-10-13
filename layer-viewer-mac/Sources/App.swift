@@ -39,6 +39,7 @@ final class HIDLink {
     private let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
     private var devices: [IOHIDDevice] = []
     private let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
+    private var keepalive: Timer?
 
     func start() {
         IOHIDManagerSetDeviceMatching(manager, [
@@ -54,6 +55,16 @@ final class HIDLink {
         }, ctx)
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
         IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        // ファームウェアは最後の問い合わせから 5 秒間だけ通知を送るので、2 秒ごとに購読を続ける
+        keepalive = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.devices.forEach { self?.requestState($0) }
+        }
+    }
+
+    private func requestState(_ device: IOHIDDevice) {
+        var req = [UInt8](repeating: 0, count: 32)
+        req[0] = 0x4C
+        IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0, &req, req.count)
     }
 
     private func attach(_ device: IOHIDDevice) {
@@ -64,10 +75,7 @@ final class HIDLink {
                 .handle(UnsafeBufferPointer(start: report, count: length))
         }, ctx)
         onConnection?(IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "Keyboard")
-        // 接続直後に現在の状態を問い合わせる
-        var req = [UInt8](repeating: 0, count: 32)
-        req[0] = 0x4C
-        IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0, &req, req.count)
+        requestState(device)  // 接続直後に現在の状態を問い合わせる
     }
 
     private func detach(_ device: IOHIDDevice) {
