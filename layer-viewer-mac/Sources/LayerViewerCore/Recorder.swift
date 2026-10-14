@@ -17,6 +17,8 @@ public enum RecEvent: Equatable {
     case os(keyCode: Int, down: Bool, autorepeat: Bool)
     /// 利用者が付けた印
     case mark
+    /// ファームウェアの計測値（システムワークキューの遅れ、設定の保存）。v3 のレポートに付いてくる
+    case diag(KeyboardDiag)
 }
 
 public struct TimedEvent: Equatable {
@@ -59,6 +61,10 @@ public enum Finding: Equatable {
     case userMark
     /// 観測がアプリに届くまで遅れた（アプリが止まっていた、または観測がまとめて届いた）
     case deliveryDelay(seconds: Double)
+    /// キーボード（左手）のシステムワークキューが止まった。直近の設定の保存も添える
+    case keyboardStall(ms: Int, recentSave: String?)
+    /// キーボードが設定を保存した
+    case settingsSave(name: String, ms: Int)
 }
 
 public struct RecorderConfig {
@@ -72,6 +78,10 @@ public struct RecorderConfig {
     public var firmwareStaleSeconds = 6.0
     /// これ以上遅れて届いた観測があったら記録する（秒）
     public var deliveryDelayThreshold = 0.5
+    /// キーボードのシステムワークキューがこれ以上遅れたら停止として記録する（ms）
+    public var stallThresholdMs = 150
+    /// 停止の前後これだけの時間内の設定の保存を、停止に添えて記録する（秒）
+    public var saveNearStallSeconds = 5.0
     public init() {}
 }
 
@@ -87,6 +97,8 @@ public final class Recorder {
     private var hidDown: [Int: (since: Double, reported: Bool)] = [:]
     private var repeating: (keyCode: Int, count: Int, since: Double, reported: Bool)?
     private var lastDelayReported = -Double.infinity
+    private var lastSaveCount: Int?
+    private var lastSave: (name: String, ms: Int, time: Double)?
 
     public init(config: RecorderConfig = RecorderConfig(),
                 usageForPosition: @escaping (_ position: Int, _ layerMask: UInt32) -> Int?) {
@@ -105,6 +117,9 @@ public final class Recorder {
         if d - t >= config.deliveryDelayThreshold && d - lastDelayReported > config.ringSeconds {
             lastDelayReported = d
             found.append(.deliveryDelay(seconds: d - t))
+        }
+        if case let .diag(diag) = event {
+            return found + feedDiag(diag, at: t, delivered: d)
         }
         // ファームウェアは購読の維持のため同じ内容を定期的に送ってくるので、変化したときだけ残す
         if case let .firmware(pressed, mask) = event, lastFirmwareReport != nil,
@@ -143,8 +158,32 @@ public final class Recorder {
             }
         case .mark:
             found.append(.userMark)
+        case .diag:
+            break  // feedDiag で扱う
         }
         return found + tick(at: d)
+    }
+
+    /// 計測値は、停止か保存があったときだけ記録に残す（毎回の報告に付いてくるので）
+    private func feedDiag(_ diag: KeyboardDiag, at t: Double, delivered d: Double) -> [Finding] {
+        var found: [Finding] = []
+        var notable = false
+        if let prev = lastSaveCount, diag.saveCount != prev {
+            lastSave = (diag.lastSaveName, diag.lastSaveMs, t)
+            found.append(.settingsSave(name: diag.lastSaveName, ms: diag.lastSaveMs))
+            notable = true
+        }
+        lastSaveCount = diag.saveCount
+        if diag.maxQueueDelayMs >= config.stallThresholdMs {
+            let recent = lastSave.flatMap { abs(t - $0.time) <= config.saveNearStallSeconds ? "\($0.name)（\($0.ms) ms）" : nil }
+            found.append(.keyboardStall(ms: diag.maxQueueDelayMs, recentSave: recent))
+            notable = true
+        }
+        if notable {
+            ring.append(TimedEvent(time: t, delivered: d, event: .diag(diag)))
+            ring.removeAll { $0.time < d - config.ringSeconds }
+        }
+        return found
     }
 
     /// 時間の経過だけで分かる異常（長押し）を調べる。定期的に呼ぶ

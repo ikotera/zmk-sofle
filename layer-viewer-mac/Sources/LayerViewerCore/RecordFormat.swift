@@ -28,6 +28,11 @@ public enum RecordFormat {
             return String(format: "長押し（Mac の HID）: %@ が %.1f 秒以上押下中", KeyCodes.name(usage: usage), seconds)
         case .userMark:
             return "利用者の印"
+        case let .keyboardStall(ms, recentSave):
+            return "キーボードの停止: 左手のキー処理（システムワークキュー）が \(ms) ms 止まった"
+                + (recentSave.map { " / 前後 5 秒以内の設定の保存: \($0)" } ?? " / 前後 5 秒以内の設定の保存: なし")
+        case let .settingsSave(name, ms):
+            return "設定の保存: \(name.isEmpty ? "?" : name)… に \(ms) ms"
         case let .deliveryDelay(seconds):
             return String(format: "配送の遅れ: 観測が %.2f 秒遅れて記録アプリに届いた（アプリが止まっていた、またはまとめて届いた）", seconds)
         }
@@ -48,6 +53,8 @@ public enum RecordFormat {
             return "\(rel) macOS       \(key) \(down ? (autorepeat ? "リピート" : "keyDown") : "keyUp")"
         case .mark:
             return "\(rel) 利用者の印"
+        case let .diag(d):
+            return "\(rel) キーボード  計測: キューの遅れ \(d.maxQueueDelayMs) ms / 最後の保存 \(d.lastSaveName)… \(d.lastSaveMs) ms（累計 \(d.saveCount)）"
         }
     }
 }

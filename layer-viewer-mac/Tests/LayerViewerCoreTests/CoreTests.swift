@@ -204,3 +204,66 @@ final class RecorderTests: XCTestCase {
         XCTAssertEqual(r.ring.map(\.time), [10])
     }
 }
+
+final class LayerReportTests: XCTestCase {
+    private func report(version: UInt8) -> [UInt8] {
+        var r = [UInt8](repeating: 0, count: 32)
+        r[0] = 0x4C; r[1] = version
+        r[4] = 0b100        // layer id 2
+        r[8 + 2] = 0b10     // position 17
+        return r
+    }
+
+    func testVersion2UsesWholeBitmap() {
+        var r = report(version: 2)
+        r[31] = 1  // position 184
+        let p = LayerReport.parse(r)!
+        XCTAssertEqual(p.layerMask, 0b101)
+        XCTAssertEqual(p.pressed, [17, 184])
+        XCTAssertNil(p.diag)
+    }
+
+    func testVersion3SeparatesDiag() {
+        var r = report(version: 3)
+        r[24] = 0x84; r[25] = 0x03         // 900 ms
+        r[26] = 120                         // 120 ms
+        r[28] = 7
+        r[29] = UInt8(ascii: "r"); r[30] = UInt8(ascii: "g"); r[31] = UInt8(ascii: "b")
+        let p = LayerReport.parse(r)!
+        XCTAssertEqual(p.pressed, [17])  // [24..] は押下中のキーとして読まない
+        XCTAssertEqual(p.diag, KeyboardDiag(maxQueueDelayMs: 900, lastSaveMs: 120, saveCount: 7, lastSaveName: "rgb"))
+    }
+
+    func testOtherReportsAreIgnored() {
+        XCTAssertNil(LayerReport.parse([0x00, 3, 0, 0, 0, 0, 0, 0]))
+    }
+}
+
+final class KeyboardDiagRecorderTests: XCTestCase {
+    private func diag(delay: Int = 0, saveMs: Int = 0, count: Int, name: String = "") -> RecEvent {
+        .diag(KeyboardDiag(maxQueueDelayMs: delay, lastSaveMs: saveMs, saveCount: count, lastSaveName: name))
+    }
+
+    func testStallWithRecentSave() {
+        let r = Recorder { _, _ in nil }
+        XCTAssertEqual(r.feed(diag(count: 3, name: "ble"), at: 0), [])  // 最初の報告は保存として数えない
+        let found = r.feed(diag(delay: 900, saveMs: 880, count: 4, name: "rgb"), at: 10)
+        XCTAssertEqual(found, [.settingsSave(name: "rgb", ms: 880), .keyboardStall(ms: 900, recentSave: "rgb（880 ms）")])
+        XCTAssertEqual(r.ring.count, 1)
+    }
+
+    func testStallWithoutSaveAndQuietReportsAreNotStored() {
+        let r = Recorder { _, _ in nil }
+        r.feed(diag(count: 3), at: 0)
+        XCTAssertEqual(r.feed(diag(delay: 20, count: 3), at: 1), [])
+        XCTAssertEqual(r.feed(diag(delay: 400, count: 3), at: 2), [.keyboardStall(ms: 400, recentSave: nil)])
+        XCTAssertEqual(r.ring.count, 1)
+    }
+
+    func testSaveCountWraps() {
+        let r = Recorder { _, _ in nil }
+        r.feed(diag(count: 255), at: 0)
+        XCTAssertEqual(r.feed(diag(saveMs: 5, count: 0, name: "ext"), at: 1), [.settingsSave(name: "ext", ms: 5)])
+    }
+}
+

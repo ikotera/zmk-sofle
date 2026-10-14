@@ -44,7 +44,7 @@ enum Settings {
 
 final class HIDLink {
     /// time はカーネルがレポートを受け取った時刻（秒、システムの稼働時間）
-    var onReport: ((_ layerMask: UInt32, _ pressed: Set<Int>, _ time: Double) -> Void)?
+    var onReport: ((_ report: LayerReport, _ time: Double) -> Void)?
     var onConnection: ((_ name: String?) -> Void)?
 
     private let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -113,15 +113,8 @@ final class HIDLink {
 
     private func handle(_ r: UnsafeBufferPointer<UInt8>, time: Double) {
         if debugLog { FileHandle.standardError.write(Data("raw hid report len=\(r.count) first=\(r.first ?? 0)\n".utf8)) }
-        guard r.count >= 8, r[0] == 0x4C else { return }
-        let mask = UInt32(r[4]) | UInt32(r[5]) << 8 | UInt32(r[6]) << 16 | UInt32(r[7]) << 24
-        var pressed = Set<Int>()
-        if r[1] >= 2 {
-            for i in 8..<r.count where r[i] != 0 {
-                for b in 0..<8 where r[i] & (1 << b) != 0 { pressed.insert((i - 8) * 8 + b) }
-            }
-        }
-        onReport?(mask | 1, pressed, time)
+        guard let report = LayerReport.parse(Array(r)) else { return }
+        onReport?(report, time)
     }
 }
 
@@ -318,14 +311,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(NSStringFromPoint(self.panel.frame.origin), forKey: "origin")
         }
 
-        hid.onReport = { [weak self] mask, pressed, time in
+        hid.onReport = { [weak self] report, time in
+            let mask = report.layerMask, pressed = report.pressed
             guard let self else { return }
             if debugLog { FileHandle.standardError.write(Data("firmware mask=\(mask) pressed=\(pressed.sorted()) t=\(time) now=\(self.now) recording=\(self.view.recording)\n".utf8)) }
             self.view.layerMask = mask
             self.view.pressed = pressed
             self.view.needsDisplay = true
             if self.view.recording {
-                self.handle(self.recorder.feed(.firmware(pressed: pressed, layerMask: mask), at: time, deliveredAt: self.now))
+                let now = self.now
+                self.handle(self.recorder.feed(.firmware(pressed: pressed, layerMask: mask), at: time, deliveredAt: now))
+                if let diag = report.diag { self.handle(self.recorder.feed(.diag(diag), at: time, deliveredAt: now)) }
             }
         }
         hid.onConnection = { [weak self] name in
@@ -396,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var dump = false
             switch f {
             case let .repeatBurst(_, _, _, verdict): dump = verdict != .keyboardHolding  // 意図した長押しは1行だけ
-            case .userMark: dump = true
+            case .userMark, .keyboardStall: dump = true
             default: break
             }
             if dump {

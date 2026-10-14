@@ -416,7 +416,9 @@ async function attachHid(dev) {
     state.layerMask = v.getUint32(4, true) | 1;
     state.pressed = new Set();
     if (v.getUint8(1) >= 2) {
-      for (let i = 8; i < v.byteLength; i++) {
+      // v3 以降は [24..] が計測値なので、押下中のキーは [8..23] だけ
+      const end = v.getUint8(1) >= 3 ? Math.min(24, v.byteLength) : v.byteLength;
+      for (let i = 8; i < end; i++) {
         const byte = v.getUint8(i);
         for (let b = 0; b < 8; b++) if (byte & (1 << b)) state.pressed.add((i - 8) * 8 + b);
       }
